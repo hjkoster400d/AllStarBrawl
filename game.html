@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>All Star Brawl — Space Action</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000; overflow: hidden; font-family: 'Segoe UI', sans-serif; touch-action: none; }
+canvas { display: block; }
+#ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+#hud { position: absolute; top: 10px; left: 10px; color: #0ff; font-size: 14px; text-shadow: 0 0 8px #0ff; }
+#title-screen, #shop-screen, #gameover-screen {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.85); color: #fff; pointer-events: all;
+}
+#title-screen h1 { font-size: 48px; color: #0ff; text-shadow: 0 0 20px #0ff, 0 0 40px #08f; margin-bottom: 10px; }
+#title-screen h2 { font-size: 18px; color: #aaa; margin-bottom: 30px; }
+.btn { padding: 12px 32px; font-size: 18px; background: transparent; border: 2px solid #0ff; color: #0ff; cursor: pointer; margin: 8px; border-radius: 4px; pointer-events: all; }
+.btn:hover { background: #0ff; color: #000; }
+#shop-screen h2 { color: #0ff; text-shadow: 0 0 10px #0ff; margin-bottom: 20px; }
+.shop-item { display: flex; align-items: center; gap: 16px; margin: 8px 0; padding: 10px 20px; border: 1px solid #333; border-radius: 4px; }
+.shop-item .name { color: #fff; width: 120px; }
+.shop-item .cost { color: #ff0; width: 60px; }
+.shop-item .btn { padding: 6px 16px; font-size: 14px; }
+#touch-controls { position: absolute; bottom: 0; left: 0; width: 100%; height: 100%; display: none; pointer-events: none; }
+.touch-btn { width: 70px; height: 70px; border-radius: 50%; border: 2px solid rgba(0,255,255,0.6); background: rgba(0,255,255,0.08); color: #0ff; font-size: 22px; display: flex; align-items: center; justify-content: center; pointer-events: all; user-select: none; -webkit-user-select: none; }
+.touch-btn:active { background: rgba(0,255,255,0.25); }
+#dpad { position: absolute; bottom: 30px; left: 25px; display: grid; grid-template: "_ u _" "l _ r" "_ d _"; gap: 6px; pointer-events: all; }
+#dpad .touch-btn { width: 64px; height: 64px; }
+#action-btns { position: absolute; bottom: 30px; right: 25px; display: flex; gap: 14px; pointer-events: all; }
+#action-btns .touch-btn { width: 80px; height: 80px; font-size: 16px; font-weight: bold; }
+#touch-shop { position: absolute; top: 15px; right: 15px; width: 50px; height: 50px; font-size: 14px; pointer-events: all; }
+@media (pointer: coarse) { #touch-controls { display: block; } }
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="ui">
+  <div id="hud"></div>
+  <div id="title-screen">
+    <h1>ALL STAR BRAWL</h1>
+    <h2>Space Action</h2>
+    <p style="color:#888;margin-bottom:20px;">Arrow keys to move • Z = attack • X = special • P = shop</p>
+    <div id="weapon-select" style="margin-bottom:20px;"></div>
+    <button class="btn" id="btn-start">LAUNCH</button>
+  </div>
+  <div id="shop-screen" class="hidden"></div>
+  <div id="gameover-screen" class="hidden">
+    <h2 style="color:#f44;text-shadow:0 0 10px #f44;">GAME OVER</h2>
+    <p style="color:#aaa;margin:10px;">Your XP has been saved.</p>
+    <button class="btn" id="btn-retry">RETRY</button>
+  </div>
+</div>
+<div id="touch-controls">
+  <div id="dpad">
+    <div></div><div class="touch-btn" data-dir="up" style="grid-area:u;">▲</div><div></div>
+    <div class="touch-btn" data-dir="left" style="grid-area:l;">◀</div><div></div><div class="touch-btn" data-dir="right" style="grid-area:r;">▶</div>
+    <div></div><div class="touch-btn" data-dir="down" style="grid-area:d;">▼</div><div></div>
+  </div>
+  <div id="action-btns">
+    <div class="touch-btn" id="touch-attack">ATK</div>
+    <div class="touch-btn" id="touch-special">SPL</div>
+  </div>
+  <div class="touch-btn" id="touch-shop">SHOP</div>
+</div>
+<script>
+// ===== CORE ENGINE =====
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let W, H;
+function resize() { W = canvas.width = innerWidth; H = canvas.height = innerHeight; }
+resize(); addEventListener('resize', resize);
+
+const keys = {};
+addEventListener('keydown', e => { keys[e.key] = true; if (e.key === 'p' || e.key === 'P') toggleMidGameShop(); });
+addEventListener('keyup', e => keys[e.key] = false);
+
+// Touch input
+const touch = { up:false, down:false, left:false, right:false, attack:false, special:false };
+document.querySelectorAll('[data-dir]').forEach(el => {
+  el.addEventListener('touchstart', e => { e.preventDefault(); touch[el.dataset.dir] = true; }, {passive:false});
+  el.addEventListener('touchend', e => { touch[el.dataset.dir] = false; });
+  el.addEventListener('touchcancel', e => { touch[el.dataset.dir] = false; });
+});
+document.getElementById('touch-attack')?.addEventListener('touchstart', e => { e.preventDefault(); touch.attack = true; }, {passive:false});
+document.getElementById('touch-attack')?.addEventListener('touchend', () => touch.attack = false);
+document.getElementById('touch-attack')?.addEventListener('touchcancel', () => touch.attack = false);
+document.getElementById('touch-special')?.addEventListener('touchstart', e => { e.preventDefault(); touch.special = true; }, {passive:false});
+document.getElementById('touch-special')?.addEventListener('touchend', () => touch.special = false);
+document.getElementById('touch-special')?.addEventListener('touchcancel', () => touch.special = false);
+document.getElementById('touch-shop')?.addEventListener('touchstart', e => { e.preventDefault(); toggleMidGameShop(); }, {passive:false});
+
+function inputLeft() { return keys['ArrowLeft'] || touch.left; }
+function inputRight() { return keys['ArrowRight'] || touch.right; }
+function inputUp() { return keys['ArrowUp'] || touch.up; }
+function inputDown() { return keys['ArrowDown'] || touch.down; }
+function inputAttack() { return keys['z'] || keys['Z'] || touch.attack; }
+function inputSpecial() { return keys['x'] || keys['X'] || touch.special; }
+
+// ===== UTILITIES =====
+function lerp(a, b, t) { return a + (b - a) * t; }
+function rand(min, max) { return Math.random() * (max - min) + min; }
+function randInt(min, max) { return Math.floor(rand(min, max + 1)); }
+function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+
+// ===== PARTICLES =====
+const particles = [];
+function spawnParticles(x, y, color, count, speed, life) {
+  for (let i = 0; i < count; i++) {
+    const angle = rand(0, Math.PI * 2);
+    const spd = rand(speed * 0.3, speed);
+    particles.push({ x, y, vx: Math.cos(angle) * spd, vy: Math.sin(angle) * spd, life, maxLife: life, color, size: rand(2, 5) });
+  }
+}
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    p.life -= dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+function drawParticles() {
+  for (const p of particles) {
+    const alpha = p.life / p.maxLife;
+    ctx.globalAlpha = alpha;
+    ctx.shadowColor = p.color;
+    ctx.shadowBlur = 8;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x - p.size/2, p.y - p.size/2, p.size, p.size);
+  }
+  ctx.globalAlpha = 1;
+  ctx.shadowBlur = 0;
+}
+
+// ===== SCREEN SHAKE =====
+let shakeAmount = 0, shakeDecay = 0.9;
+function shake(amount) { shakeAmount = Math.max(shakeAmount, amount); }
+
+// ===== STARS BACKGROUND =====
+const stars = Array.from({length: 150}, () => ({ x: rand(0, 2000), y: rand(0, 2000), size: rand(0.5, 2.5), speed: rand(0.1, 0.5) }));
+function drawStars(camX, camY) {
+  ctx.fillStyle = '#fff';
+  for (const s of stars) {
+    const sx = ((s.x - camX * s.speed) % W + W) % W;
+    const sy = ((s.y - camY * s.speed) % H + H) % H;
+    ctx.globalAlpha = 0.3 + s.size / 3;
+    ctx.fillRect(sx, sy, s.size, s.size);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ===== GAME STATE =====
+let gameState = 'title'; // title, playing, shop, gameover
+let totalXP = parseInt(localStorage.getItem('asbXP') || '0');
+let roundXP = 0;
+let killCount = 0;
+let waveNum = 1;
+let bossActive = false;
+const KILLS_PER_BOSS = 12;
+
+// ===== SAVE/LOAD =====
+function saveProgress() { localStorage.setItem('asbXP', totalXP); localStorage.setItem('asbUpgrades', JSON.stringify(upgrades)); localStorage.setItem('asbUnlocked', JSON.stringify(unlockedWeapons)); }
+function loadProgress() {
+  totalXP = parseInt(localStorage.getItem('asbXP') || '0');
+  const saved = localStorage.getItem('asbUpgrades');
+  if (saved) Object.assign(upgrades, JSON.parse(saved));
+  const unlocked = localStorage.getItem('asbUnlocked');
+  if (unlocked) unlockedWeapons = JSON.parse(unlocked);
+}
+
+// ===== WEAPONS =====
+const WEAPONS = {
+  pistol: { name: 'Plasma Pistol', type:'ranged', color:'#0ff', damage:8, fireRate:0.25, projSpeed:600, projSize:4, special:'burst', specialCost:0.8, desc:'Fast plasma shots' },
+  shotgun: { name: 'Nova Shotgun', type:'ranged', color:'#f80', damage:5, fireRate:0.6, projSpeed:500, projSize:3, special:'blast', specialCost:1.2, desc:'Spread shot' },
+  bow: { name: 'Photon Bow', type:'ranged', color:'#af0', damage:18, fireRate:0.9, projSpeed:800, projSize:5, special:'pierce', specialCost:1.0, desc:'Charged piercing arrow' },
+  sword: { name: 'Ion Blade', type:'melee', color:'#f0f', damage:22, fireRate:0.35, range:70, arc:2.2, special:'spin', specialCost:1.5, desc:'Wide energy slash' },
+  trident: { name: 'Volt Trident', type:'melee', color:'#ff0', damage:18, fireRate:0.5, range:90, arc:1.0, special:'bolt', specialCost:1.0, desc:'Stab + charged bolt' },
+  axe: { name: 'Gravity Axe', type:'melee', color:'#f44', damage:35, fireRate:0.9, range:60, arc:2.8, special:'slam', specialCost:2.0, desc:'Massive overhead slam' },
+  lance: { name: 'Stellar Lance', type:'melee', color:'#4ff', damage:28, fireRate:0.7, range:110, arc:0.6, special:'charge', specialCost:1.5, desc:'Long reach thrust', unlock:500 },
+  railgun: { name: 'Void Railgun', type:'ranged', color:'#f0f', damage:45, fireRate:1.5, projSpeed:1200, projSize:6, special:'overload', specialCost:2.0, desc:'Devastating beam', unlock:800 },
+  scythe: { name: 'Dark Scythe', type:'melee', color:'#a0f', damage:40, fireRate:0.8, range:85, arc:3.0, special:'reap', specialCost:2.0, desc:'Drains HP on hit', unlock:1200 },
+};
+
+let unlockedWeapons = ['pistol','shotgun','bow','sword','trident','axe'];
+let currentWeapon = 'pistol';
+
+// ===== UPGRADES =====
+let upgrades = { damage:0, speed:0, health:0, energy:0, ship:0 };
+const UPGRADE_COSTS = { damage:50, speed:40, health:60, energy:45, ship:100 };
+function getUpgradeMultiplier(stat) { return 1 + upgrades[stat] * 0.15; }
+
+// ===== PLAYER =====
+let player = null;
+function createPlayer() {
+  return {
+    x: W/2, y: H/2, vx: 0, vy: 0,
+    hp: 100 * getUpgradeMultiplier('health'), maxHp: 100 * getUpgradeMultiplier('health'),
+    energy: 100 * getUpgradeMultiplier('energy'), maxEnergy: 100 * getUpgradeMultiplier('energy'),
+    facing: 1, // 1=right, -1=left
+    attackCooldown: 0, specialCharging: false, specialCharge: 0,
+    invincible: 0, size: 20,
+    speed: 280 * getUpgradeMultiplier('speed'),
+  };
+}
+
+// ===== PROJECTILES =====
+const projectiles = [];
+function spawnProjectile(x, y, vx, vy, damage, color, size, pierce) {
+  projectiles.push({ x, y, vx, vy, damage, color, size: size||4, life: 3, pierce: pierce||false, hit: new Set() });
+}
+
+// ===== MELEE ATTACKS =====
+const meleeAttacks = [];
+function spawnMelee(x, y, facing, weapon) {
+  const w = WEAPONS[weapon];
+  const dmg = w.damage * getUpgradeMultiplier('damage');
+  meleeAttacks.push({ x, y, facing, range: w.range, arc: w.arc, damage: dmg, color: w.color, life: 0.15, maxLife: 0.15 });
+}
+
+// ===== ENEMIES =====
+const enemies = [];
+const ENEMY_TYPES = {
+  scout: { hp:20, speed:120, size:15, color:'#0f8', damage:8, xp:10, behavior:'chase' },
+  brute: { hp:60, speed:60, size:28, color:'#f80', damage:15, xp:25, behavior:'chase' },
+  shooter: { hp:30, speed:80, size:18, color:'#f0f', damage:10, xp:20, behavior:'ranged', fireRate:1.5 },
+  dasher: { hp:25, speed:200, size:14, color:'#ff0', damage:12, xp:15, behavior:'dash' },
+};
+
+function spawnEnemy(type, x, y) {
+  const t = ENEMY_TYPES[type];
+  enemies.push({ ...t, type, x, y, vx:0, vy:0, maxHp:t.hp, attackCooldown:0, dashTimer:rand(1,3), hitFlash:0 });
+}
+
+function spawnBoss() {
+  bossActive = true;
+  const boss = {
+    type:'boss', hp:300 + waveNum*100, maxHp:300 + waveNum*100,
+    x: player.x + (Math.random()>0.5?1:-1) * 400, y: player.y + rand(-200,200),
+    vx:0, vy:0, speed:50, size:50, color:'#f00', damage:25, xp:150+waveNum*50,
+    behavior:'boss', attackCooldown:0, phase:0, hitFlash:0
+  };
+  enemies.push(boss);
+}
+
+function spawnWaveEnemy() {
+  const types = ['scout','scout','scout','brute','shooter','dasher'];
+  const type = types[randInt(0, Math.min(types.length-1, 2 + waveNum))];
+  const side = rand(0,1) > 0.5 ? -1 : 1;
+  const x = player.x + side * (W/2 + 50);
+  const y = player.y + rand(-H/2, H/2);
+  spawnEnemy(type, x, y);
+}
+
+// ===== ATTACK LOGIC =====
+let attackPressed = false, specialPressed = false;
+function handleCombat(dt) {
+  player.attackCooldown -= dt;
+  player.energy = Math.min(player.maxEnergy, player.energy + 15 * dt);
+
+  const atk = inputAttack();
+  const spc = inputSpecial();
+
+  // Primary attack
+  if (atk && !attackPressed && player.attackCooldown <= 0) {
+    const w = WEAPONS[currentWeapon];
+    player.attackCooldown = w.fireRate;
+    if (w.type === 'ranged') {
+      const dmg = w.damage * getUpgradeMultiplier('damage');
+      spawnProjectile(player.x + player.facing*25, player.y, player.facing * w.projSpeed, 0, dmg, w.color, w.projSize, false);
+      spawnParticles(player.x + player.facing*25, player.y, w.color, 4, 100, 0.3);
+    } else {
+      spawnMelee(player.x, player.y, player.facing, currentWeapon);
+      shake(3);
+    }
+  }
+  attackPressed = atk;
+
+  // Special attack
+  if (spc && !specialPressed) {
+    const w = WEAPONS[currentWeapon];
+    const cost = w.specialCost * (100 / getUpgradeMultiplier('energy'));
+    if (player.energy >= cost) {
+      player.energy -= cost;
+      performSpecial(w);
+    }
+  }
+  specialPressed = spc;
+}
+
+function performSpecial(w) {
+  const dmg = w.damage * 2.5 * getUpgradeMultiplier('damage');
+  shake(8);
+  switch(w.special) {
+    case 'burst':
+      for (let i = -1; i <= 1; i++)
+        spawnProjectile(player.x+player.facing*20, player.y, player.facing*w.projSpeed, i*150, dmg*0.6, '#fff', 5, false);
+      break;
+    case 'blast':
+      for (let i = -3; i <= 3; i++)
+        spawnProjectile(player.x+player.facing*20, player.y, player.facing*w.projSpeed*0.8, i*100, dmg*0.4, w.color, 4, false);
+      break;
+    case 'pierce':
+      spawnProjectile(player.x+player.facing*20, player.y, player.facing*w.projSpeed*1.5, 0, dmg, '#fff', 8, true);
+      break;
+    case 'spin':
+      for (let a = 0; a < Math.PI*2; a += 0.4)
+        meleeAttacks.push({ x:player.x, y:player.y, facing:1, range:w.range*1.5, arc:6.28, damage:dmg*0.7, color:'#fff', life:0.2, maxLife:0.2 });
+      break;
+    case 'bolt':
+      spawnProjectile(player.x+player.facing*20, player.y, player.facing*700, 0, dmg, '#ff0', 7, true);
+      spawnParticles(player.x, player.y, '#ff0', 12, 200, 0.5);
+      break;
+    case 'slam':
+      meleeAttacks.push({ x:player.x, y:player.y, facing:player.facing, range:100, arc:4.0, damage:dmg*1.5, color:'#f44', life:0.25, maxLife:0.25 });
+      spawnParticles(player.x, player.y, '#f44', 20, 250, 0.6);
+      break;
+    case 'charge':
+      player.vx += player.facing * 500;
+      meleeAttacks.push({ x:player.x+player.facing*60, y:player.y, facing:player.facing, range:120, arc:1.2, damage:dmg, color:'#4ff', life:0.3, maxLife:0.3 });
+      break;
+    case 'overload':
+      spawnProjectile(player.x+player.facing*20, player.y, player.facing*1500, 0, dmg*1.5, '#f0f', 10, true);
+      shake(12);
+      break;
+    case 'reap':
+      meleeAttacks.push({ x:player.x, y:player.y, facing:player.facing, range:100, arc:3.5, damage:dmg, color:'#a0f', life:0.2, maxLife:0.2 });
+      player.hp = Math.min(player.maxHp, player.hp + 20);
+      break;
+  }
+  spawnParticles(player.x, player.y, w.color, 15, 200, 0.5);
+}
+
+// ===== UPDATE =====
+let spawnTimer = 0;
+function update(dt) {
+  if (gameState !== 'playing') return;
+
+  // Player movement (zero gravity float)
+  const accel = 800;
+  const drag = 3.0;
+  if (inputLeft()) { player.vx -= accel * dt; player.facing = -1; }
+  if (inputRight()) { player.vx += accel * dt; player.facing = 1; }
+  if (inputUp()) player.vy -= accel * dt;
+  if (inputDown()) player.vy += accel * dt;
+  player.vx *= (1 - drag * dt);
+  player.vy *= (1 - drag * dt);
+  const maxSpd = player.speed;
+  const spd = Math.hypot(player.vx, player.vy);
+  if (spd > maxSpd) { player.vx *= maxSpd/spd; player.vy *= maxSpd/spd; }
+  player.x += player.vx * dt;
+  player.y += player.vy * dt;
+  player.invincible -= dt;
+
+  // Combat
+  handleCombat(dt);
+
+  // Projectiles
+  for (let i = projectiles.length-1; i >= 0; i--) {
+    const p = projectiles[i];
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    p.life -= dt;
+    if (p.life <= 0 || dist(p, player) > 1200) { projectiles.splice(i, 1); continue; }
+    // Hit enemies
+    for (let j = enemies.length-1; j >= 0; j--) {
+      const e = enemies[j];
+      if (p.hit.has(j)) continue;
+      if (dist(p, e) < e.size + p.size) {
+        e.hp -= p.damage;
+        e.hitFlash = 0.1;
+        spawnParticles(p.x, p.y, p.color, 6, 150, 0.3);
+        shake(2);
+        if (p.pierce) { p.hit.add(j); } else { projectiles.splice(i, 1); break; }
+      }
+    }
+  }
+
+  // Melee attacks
+  for (let i = meleeAttacks.length-1; i >= 0; i--) {
+    const m = meleeAttacks[i];
+    m.life -= dt;
+    if (m.life <= 0) { meleeAttacks.splice(i, 1); continue; }
+    for (const e of enemies) {
+      const d = dist(m, e);
+      if (d < m.range + e.size) {
+        const angle = Math.atan2(e.y - m.y, e.x - m.x);
+        const facingAngle = m.facing > 0 ? 0 : Math.PI;
+        let diff = Math.abs(angle - facingAngle);
+        if (diff > Math.PI) diff = Math.PI*2 - diff;
+        if (diff < m.arc/2 || m.arc >= Math.PI*2) {
+          e.hp -= m.damage * dt / m.maxLife;
+          e.hitFlash = 0.08;
+          spawnParticles(e.x, e.y, m.color, 2, 80, 0.2);
+        }
+      }
+    }
+  }
+
+  // Enemy AI
+  for (let i = enemies.length-1; i >= 0; i--) {
+    const e = enemies[i];
+    e.hitFlash -= dt;
+    if (e.hp <= 0) {
+      spawnParticles(e.x, e.y, e.color, 20, 200, 0.6);
+      shake(e.type==='boss'?15:4);
+      roundXP += e.xp;
+      killCount++;
+      enemies.splice(i, 1);
+      if (e.type === 'boss') { bossActive = false; endRound(); }
+      else if (!bossActive && killCount >= KILLS_PER_BOSS * waveNum) { spawnBoss(); }
+      continue;
+    }
+    // Movement
+    const dx = player.x - e.x, dy = player.y - e.y;
+    const d = Math.hypot(dx, dy) || 1;
+    if (e.behavior === 'chase' || e.behavior === 'boss') {
+      e.vx = (dx/d) * e.speed; e.vy = (dy/d) * e.speed;
+    } else if (e.behavior === 'ranged') {
+      if (d > 250) { e.vx = (dx/d)*e.speed; e.vy = (dy/d)*e.speed; }
+      else { e.vx = -(dx/d)*e.speed*0.5; e.vy = -(dy/d)*e.speed*0.5; }
+      e.attackCooldown -= dt;
+      if (e.attackCooldown <= 0) {
+        e.attackCooldown = e.fireRate||1.5;
+        spawnEnemyProjectile(e.x, e.y, (dx/d)*300, (dy/d)*300, e.damage, e.color);
+      }
+    } else if (e.behavior === 'dash') {
+      e.dashTimer -= dt;
+      if (e.dashTimer <= 0) { e.vx = (dx/d)*e.speed*2; e.vy = (dy/d)*e.speed*2; e.dashTimer = rand(1.5,3); }
+      else { e.vx *= 0.95; e.vy *= 0.95; }
+    }
+    e.x += e.vx * dt; e.y += e.vy * dt;
+    // Collision with player
+    if (dist(e, player) < e.size + player.size && player.invincible <= 0) {
+      player.hp -= e.damage;
+      player.invincible = 0.5;
+      shake(6);
+      spawnParticles(player.x, player.y, '#f00', 10, 150, 0.4);
+      if (player.hp <= 0) gameOver();
+    }
+  }
+
+  // Enemy projectiles
+  for (let i = enemyProjectiles.length-1; i >= 0; i--) {
+    const p = enemyProjectiles[i];
+    p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+    if (p.life <= 0) { enemyProjectiles.splice(i, 1); continue; }
+    if (dist(p, player) < player.size + 5 && player.invincible <= 0) {
+      player.hp -= p.damage;
+      player.invincible = 0.3;
+      shake(4);
+      spawnParticles(player.x, player.y, '#f00', 6, 100, 0.3);
+      enemyProjectiles.splice(i, 1);
+      if (player.hp <= 0) gameOver();
+    }
+  }
+
+  // Spawn enemies
+  spawnTimer -= dt;
+  if (spawnTimer <= 0 && !bossActive) {
+    spawnTimer = Math.max(0.8, 2.5 - waveNum * 0.2);
+    spawnWaveEnemy();
+  }
+
+  // Particles
+  updateParticles(dt);
+  shakeAmount *= shakeDecay;
+}
+
+const enemyProjectiles = [];
+function spawnEnemyProjectile(x, y, vx, vy, damage, color) {
+  enemyProjectiles.push({ x, y, vx, vy, damage, color, life: 4 });
+}
+
+// ===== RENDERING =====
+function draw() {
+  ctx.fillStyle = '#0a0a12';
+  ctx.fillRect(0, 0, W, H);
+
+  if (gameState !== 'playing') return;
+
+  // Camera
+  const camX = player.x - W/2;
+  const camY = player.y - H/2;
+  const sx = (Math.random()-0.5) * shakeAmount;
+  const sy = (Math.random()-0.5) * shakeAmount;
+
+  ctx.save();
+  ctx.translate(-camX + sx, -camY + sy);
+
+  drawStars(camX, camY);
+
+  // Draw enemy projectiles
+  for (const p of enemyProjectiles) {
+    ctx.shadowColor = p.color; ctx.shadowBlur = 10;
+    ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.shadowBlur = 0;
+
+  // Draw projectiles
+  for (const p of projectiles) {
+    ctx.shadowColor = p.color; ctx.shadowBlur = 12;
+    ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI*2); ctx.fill();
+    // Trail
+    ctx.globalAlpha = 0.4;
+    ctx.beginPath(); ctx.arc(p.x - p.vx*0.02, p.y - p.vy*0.02, p.size*0.7, 0, Math.PI*2); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+  ctx.shadowBlur = 0;
+
+  // Draw melee attacks
+  for (const m of meleeAttacks) {
+    const alpha = m.life / m.maxLife;
+    ctx.globalAlpha = alpha * 0.6;
+    ctx.strokeStyle = m.color;
+    ctx.shadowColor = m.color; ctx.shadowBlur = 15;
+    ctx.lineWidth = 3;
+    const startAngle = (m.facing > 0 ? -m.arc/2 : Math.PI - m.arc/2);
+    ctx.beginPath();
+    ctx.arc(m.x, m.y, m.range * (1 - alpha*0.3), startAngle, startAngle + m.arc);
+    ctx.stroke();
+    ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+  }
+
+  // Draw enemies
+  for (const e of enemies) {
+    ctx.save();
+    ctx.translate(e.x, e.y);
+    const flash = e.hitFlash > 0;
+
+    // Glow
+    ctx.shadowColor = flash ? '#fff' : e.color;
+    ctx.shadowBlur = flash ? 20 : 12;
+    ctx.fillStyle = flash ? '#fff' : e.color;
+
+    if (e.type === 'boss') {
+      // Boss: spiked shape
+      ctx.beginPath();
+      for (let a = 0; a < Math.PI*2; a += Math.PI/5) {
+        const r = a % (Math.PI*2/5) < Math.PI/5 ? e.size : e.size * 0.6;
+        ctx.lineTo(Math.cos(a)*r, Math.sin(a)*r);
+      }
+      ctx.closePath(); ctx.fill();
+      // HP bar
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#300';
+      ctx.fillRect(-30, -e.size-15, 60, 6);
+      ctx.fillStyle = '#f00';
+      ctx.fillRect(-30, -e.size-15, 60*(e.hp/e.maxHp), 6);
+    } else {
+      // Regular: glowing alien shapes
+      ctx.beginPath();
+      if (e.behavior === 'dash') {
+        // Diamond
+        ctx.moveTo(0, -e.size); ctx.lineTo(e.size, 0); ctx.lineTo(0, e.size); ctx.lineTo(-e.size, 0);
+      } else if (e.behavior === 'ranged') {
+        // Triangle
+        ctx.moveTo(0, -e.size); ctx.lineTo(e.size, e.size); ctx.lineTo(-e.size, e.size);
+      } else {
+        // Circle
+        ctx.arc(0, 0, e.size, 0, Math.PI*2);
+      }
+      ctx.closePath(); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // Draw player
+  ctx.save();
+  ctx.translate(player.x, player.y);
+  if (player.invincible > 0 && Math.floor(player.invincible*10)%2===0) ctx.globalAlpha = 0.4;
+  ctx.scale(player.facing, 1);
+
+  const shipLv = upgrades.ship;
+  const s = 1 + shipLv * 0.12; // ship gets bigger with level
+
+  // Engine exhaust (animated)
+  const flicker = 0.7 + Math.random()*0.3;
+  ctx.shadowColor = '#08f'; ctx.shadowBlur = 15 + shipLv*3;
+  ctx.fillStyle = '#08f';
+  ctx.beginPath();
+  ctx.ellipse(-18*s, 0, (4+shipLv)*flicker, (3+shipLv*0.5)*flicker, 0, 0, Math.PI*2);
+  ctx.fill();
+  if (shipLv >= 2) { // double exhaust
+    ctx.beginPath();
+    ctx.ellipse(-18*s, -6*s, 3*flicker, 2*flicker, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(-18*s, 6*s, 3*flicker, 2*flicker, 0, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // Wings
+  ctx.shadowColor = '#0ff'; ctx.shadowBlur = 10 + shipLv*2;
+  ctx.fillStyle = '#067';
+  ctx.beginPath();
+  ctx.moveTo(-8*s, -5*s); ctx.lineTo(-14*s, -16*s); ctx.lineTo(2*s, -8*s);
+  ctx.closePath(); ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(-8*s, 5*s); ctx.lineTo(-14*s, 16*s); ctx.lineTo(2*s, 8*s);
+  ctx.closePath(); ctx.fill();
+
+  // Extra wings at higher levels
+  if (shipLv >= 3) {
+    ctx.fillStyle = '#045';
+    ctx.beginPath();
+    ctx.moveTo(-12*s, -8*s); ctx.lineTo(-16*s, -22*s); ctx.lineTo(-2*s, -12*s);
+    ctx.closePath(); ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(-12*s, 8*s); ctx.lineTo(-16*s, 22*s); ctx.lineTo(-2*s, 12*s);
+    ctx.closePath(); ctx.fill();
+  }
+
+  // Main hull
+  ctx.shadowColor = '#0ff'; ctx.shadowBlur = 15 + shipLv*3;
+  ctx.fillStyle = '#0ae';
+  ctx.beginPath();
+  ctx.moveTo(22*s, 0);
+  ctx.quadraticCurveTo(10*s, -8*s, -12*s, -6*s);
+  ctx.lineTo(-16*s, 0);
+  ctx.lineTo(-12*s, 6*s);
+  ctx.quadraticCurveTo(10*s, 8*s, 22*s, 0);
+  ctx.closePath(); ctx.fill();
+
+  // Cockpit
+  ctx.shadowBlur = 5;
+  ctx.fillStyle = '#4ff';
+  ctx.beginPath();
+  ctx.ellipse(8*s, 0, 5*s, 3.5*s, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  // Accent lines (level indicator)
+  ctx.strokeStyle = '#0ff';
+  ctx.lineWidth = 1.5;
+  ctx.shadowColor = '#0ff'; ctx.shadowBlur = 8;
+  for (let i = 0; i < Math.min(shipLv, 5); i++) {
+    ctx.beginPath();
+    ctx.moveTo((2 - i*5)*s, -5*s);
+    ctx.lineTo((2 - i*5)*s, 5*s);
+    ctx.stroke();
+  }
+
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  // Particles
+  drawParticles();
+
+  ctx.restore();
+
+  // ===== CANVAS HUD =====
+  const hpPct = clamp(player.hp / player.maxHp, 0, 1);
+  const enPct = clamp(player.energy / player.maxEnergy, 0, 1);
+  const barW = 180, barH = 14, barX = 15, gap = 6;
+
+  // HP bar
+  let yy = 15;
+  ctx.fillStyle = '#1a0000'; ctx.fillRect(barX, yy, barW, barH);
+  const hpGrad = ctx.createLinearGradient(barX, yy, barX+barW*hpPct, yy);
+  hpGrad.addColorStop(0, '#f44'); hpGrad.addColorStop(1, '#f88');
+  ctx.fillStyle = hpGrad; ctx.fillRect(barX, yy, barW*hpPct, barH);
+  ctx.shadowColor = '#f44'; ctx.shadowBlur = 6;
+  ctx.strokeStyle = '#f44'; ctx.lineWidth = 1; ctx.strokeRect(barX, yy, barW, barH);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 11px Segoe UI';
+  ctx.fillText(`HP ${Math.ceil(player.hp)} / ${Math.ceil(player.maxHp)}`, barX+6, yy+11);
+
+  // Energy bar
+  yy += barH + gap;
+  ctx.fillStyle = '#001a1a'; ctx.fillRect(barX, yy, barW, barH);
+  const enGrad = ctx.createLinearGradient(barX, yy, barX+barW*enPct, yy);
+  enGrad.addColorStop(0, '#08f'); enGrad.addColorStop(1, '#0ff');
+  ctx.fillStyle = enGrad; ctx.fillRect(barX, yy, barW*enPct, barH);
+  ctx.shadowColor = '#0ff'; ctx.shadowBlur = 6;
+  ctx.strokeStyle = '#0af'; ctx.lineWidth = 1; ctx.strokeRect(barX, yy, barW, barH);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 11px Segoe UI';
+  ctx.fillText(`EN ${Math.ceil(player.energy)} / ${Math.ceil(player.maxEnergy)}`, barX+6, yy+11);
+
+  // XP + Wave info
+  yy += barH + gap + 4;
+  ctx.shadowColor = '#0ff'; ctx.shadowBlur = 4;
+  ctx.fillStyle = '#0ff'; ctx.font = 'bold 13px Segoe UI';
+  ctx.fillText(`⭐ XP: ${roundXP}`, barX, yy+12);
+  ctx.fillStyle = '#aaa'; ctx.font = '12px Segoe UI';
+  ctx.fillText(`Total: ${totalXP + roundXP}`, barX+80, yy+12);
+  ctx.shadowBlur = 0;
+
+  yy += 20;
+  ctx.fillStyle = '#ff0'; ctx.font = 'bold 13px Segoe UI';
+  ctx.shadowColor = '#ff0'; ctx.shadowBlur = 4;
+  ctx.fillText(`Wave ${waveNum}`, barX, yy+12);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#888'; ctx.font = '12px Segoe UI';
+  ctx.fillText(`Kills: ${killCount}/${KILLS_PER_BOSS*waveNum}`, barX+65, yy+12);
+
+  // Weapon display (bottom-left)
+  const wInfo = WEAPONS[currentWeapon];
+  ctx.fillStyle = wInfo.color; ctx.font = 'bold 14px Segoe UI';
+  ctx.shadowColor = wInfo.color; ctx.shadowBlur = 8;
+  ctx.fillText(`⚔ ${wInfo.name}`, barX, H - 25);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#666'; ctx.font = '11px Segoe UI';
+  ctx.fillText('[P] Shop', barX, H - 8);
+
+  // Ship level indicator (top-right)
+  ctx.fillStyle = '#0ff'; ctx.font = 'bold 12px Segoe UI';
+  ctx.textAlign = 'right';
+  ctx.shadowColor = '#0ff'; ctx.shadowBlur = 4;
+  ctx.fillText(`🚀 Ship Lv${upgrades.ship}`, W-15, 25);
+  ctx.shadowBlur = 0;
+  ctx.textAlign = 'left';
+}
+
+// ===== GAME FLOW =====
+let shopContext = 'endRound'; // 'endRound' or 'midGame'
+
+function toggleMidGameShop() {
+  if (gameState === 'playing') { shopContext = 'midGame'; showShop(); }
+  else if (gameState === 'shop' && shopContext === 'midGame') { continueGame(); }
+}
+
+function renderWeaponSelect(containerId) {
+  loadProgress();
+  const el = document.getElementById(containerId);
+  let html = '<p style="color:#aaa;margin-bottom:10px;">Choose your weapon:</p><div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center;">';
+  for (const key of unlockedWeapons) {
+    const w = WEAPONS[key];
+    const sel = key === currentWeapon ? 'border-color:#0ff;background:rgba(0,255,255,0.15);' : '';
+    html += `<button class="btn" style="${sel}color:${w.color};border-color:${w.color};padding:8px 16px;font-size:14px;" onclick="window.selectStartWeapon('${key}')">${w.name}</button>`;
+  }
+  html += '</div>';
+  el.innerHTML = html;
+}
+window.selectStartWeapon = function(key) { currentWeapon = key; renderWeaponSelect('weapon-select'); };
+
+function startGame() {
+  loadProgress();
+  player = createPlayer();
+  enemies.length = 0; projectiles.length = 0; enemyProjectiles.length = 0;
+  particles.length = 0; meleeAttacks.length = 0;
+  roundXP = 0; killCount = 0; waveNum = 1; bossActive = false; spawnTimer = 2;
+  gameState = 'playing';
+  document.getElementById('title-screen').classList.add('hidden');
+  document.getElementById('gameover-screen').classList.add('hidden');
+  document.getElementById('shop-screen').classList.add('hidden');
+}
+
+function endRound() {
+  totalXP += roundXP;
+  waveNum++;
+  shopContext = 'endRound';
+  saveProgress();
+  showShop();
+}
+
+function gameOver() {
+  totalXP += roundXP;
+  saveProgress();
+  gameState = 'gameover';
+  document.getElementById('gameover-screen').classList.remove('hidden');
+}
+
+function showShop() {
+  gameState = 'shop';
+  const shop = document.getElementById('shop-screen');
+  const title = shopContext === 'midGame' ? 'SHOP' : `SHOP — Wave ${waveNum} Complete`;
+  let html = `<h2>${title}</h2><p style="color:#0ff;margin-bottom:15px;">XP Available: <span id="shop-xp">${totalXP}</span></p>`;
+
+  // Stat upgrades
+  html += '<h3 style="color:#aaa;margin:10px 0;">UPGRADES</h3>';
+  const statNames = { damage:'⚔ Damage', speed:'💨 Speed', health:'❤️ Health', energy:'⚡ Energy', ship:'🚀 Ship' };
+  for (const [stat, level] of Object.entries(upgrades)) {
+    const cost = UPGRADE_COSTS[stat] * (level + 1);
+    const canBuy = totalXP >= cost;
+    html += `<div class="shop-item"><span class="name">${statNames[stat]} Lv${level}</span><span class="cost">${cost} XP</span><button class="btn" ${canBuy?'':'style="opacity:0.4;pointer-events:none;"'} onclick="buyUpgrade('${stat}',${cost})">BUY</button></div>`;
+  }
+
+  // Weapon unlocks
+  const locked = Object.entries(WEAPONS).filter(([k,w]) => w.unlock && !unlockedWeapons.includes(k));
+  if (locked.length) {
+    html += '<h3 style="color:#aaa;margin:15px 0 10px;">UNLOCK WEAPONS</h3>';
+    for (const [key, w] of locked) {
+      const canBuy = totalXP >= w.unlock;
+      html += `<div class="shop-item"><span class="name" style="color:${w.color}">${w.name}</span><span class="cost">${w.unlock} XP</span><button class="btn" ${canBuy?'':'style="opacity:0.4;pointer-events:none;"'} onclick="buyWeapon('${key}',${w.unlock})">UNLOCK</button></div>`;
+    }
+  }
+
+  // Weapon equip
+  html += '<h3 style="color:#aaa;margin:15px 0 10px;">EQUIP WEAPON</h3><div style="display:flex;flex-wrap:wrap;gap:8px;">';
+  for (const key of unlockedWeapons) {
+    const w = WEAPONS[key];
+    const sel = key === currentWeapon ? 'border-color:#0ff;background:rgba(0,255,255,0.1);' : '';
+    html += `<button class="btn" style="${sel}color:${w.color};border-color:${w.color};" onclick="equipWeapon('${key}')">${w.name}</button>`;
+  }
+  html += '</div>';
+
+  const btnLabel = shopContext === 'midGame' ? 'RESUME' : 'NEXT WAVE →';
+  html += `<br><button class="btn" onclick="continueGame()">${btnLabel}</button>`;
+  shop.innerHTML = html;
+  shop.classList.remove('hidden');
+}
+
+function buyUpgrade(stat, cost) {
+  if (totalXP >= cost) { totalXP -= cost; upgrades[stat]++; saveProgress(); showShop(); }
+}
+function buyWeapon(key, cost) {
+  if (totalXP >= cost && !unlockedWeapons.includes(key)) { totalXP -= cost; unlockedWeapons.push(key); saveProgress(); showShop(); }
+}
+function equipWeapon(key) { currentWeapon = key; showShop(); }
+function continueGame() {
+  document.getElementById('shop-screen').classList.add('hidden');
+  if (shopContext === 'midGame') {
+    // Resume where we left off
+    gameState = 'playing';
+  } else {
+    // New wave reset
+    player = createPlayer();
+    enemies.length = 0; projectiles.length = 0; enemyProjectiles.length = 0;
+    particles.length = 0; meleeAttacks.length = 0;
+    roundXP = 0; killCount = 0; bossActive = false; spawnTimer = 1;
+    gameState = 'playing';
+  }
+}
+window.buyUpgrade = buyUpgrade;
+window.buyWeapon = buyWeapon;
+window.equipWeapon = equipWeapon;
+window.continueGame = continueGame;
+
+// ===== MAIN LOOP =====
+let lastTime = 0;
+function loop(time) {
+  const dt = Math.min((time - lastTime) / 1000, 0.05);
+  lastTime = time;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+
+// ===== INIT =====
+document.getElementById('btn-start').addEventListener('click', startGame);
+document.getElementById('btn-retry').addEventListener('click', startGame);
+loadProgress();
+renderWeaponSelect('weapon-select');
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
