@@ -83,25 +83,57 @@ addEventListener('keyup', e => keys[e.key] = false);
 // Touch input
 const touch = { up:false, down:false, left:false, right:false, attack:false, special:false };
 
-// D-pad: track touches on the entire dpad area by checking which button the touch is over
+// D-pad: use center-of-dpad + offset to determine direction
 const dpadEl = document.getElementById('dpad');
-const dpadBtns = document.querySelectorAll('[data-dir]');
-function updateDpadFromTouches(e) {
+function getDpadDir(touchX, touchY) {
+  const rect = dpadEl.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const dx = touchX - cx;
+  const dy = touchY - cy;
+  const deadzone = 10;
+  const dirs = {};
+  if (dx < -deadzone) dirs.left = true;
+  if (dx > deadzone) dirs.right = true;
+  if (dy < -deadzone) dirs.up = true;
+  if (dy > deadzone) dirs.down = true;
+  return dirs;
+}
+
+// Track which touch IDs belong to the dpad
+const dpadTouchIds = new Set();
+
+function handleDpadStart(e) {
   e.preventDefault();
-  // Reset all directions
+  for (const t of e.changedTouches) dpadTouchIds.add(t.identifier);
+  updateDpadState(e);
+}
+function handleDpadMove(e) {
+  e.preventDefault();
+  updateDpadState(e);
+}
+function handleDpadEnd(e) {
+  e.preventDefault();
+  for (const t of e.changedTouches) dpadTouchIds.delete(t.identifier);
+  updateDpadState(e);
+}
+function updateDpadState(e) {
   touch.up = touch.down = touch.left = touch.right = false;
-  // Check each active touch
   for (const t of e.touches) {
-    const el = document.elementFromPoint(t.clientX, t.clientY);
-    if (el && el.dataset && el.dataset.dir) {
-      touch[el.dataset.dir] = true;
+    if (dpadTouchIds.has(t.identifier)) {
+      const dirs = getDpadDir(t.clientX, t.clientY);
+      if (dirs.up) touch.up = true;
+      if (dirs.down) touch.down = true;
+      if (dirs.left) touch.left = true;
+      if (dirs.right) touch.right = true;
     }
   }
 }
-dpadEl.addEventListener('touchstart', updateDpadFromTouches, {passive:false});
-dpadEl.addEventListener('touchmove', updateDpadFromTouches, {passive:false});
-dpadEl.addEventListener('touchend', updateDpadFromTouches, {passive:false});
-dpadEl.addEventListener('touchcancel', updateDpadFromTouches, {passive:false});
+
+dpadEl.addEventListener('touchstart', handleDpadStart, {passive:false});
+dpadEl.addEventListener('touchmove', handleDpadMove, {passive:false});
+dpadEl.addEventListener('touchend', handleDpadEnd, {passive:false});
+dpadEl.addEventListener('touchcancel', handleDpadEnd, {passive:false});
 
 document.getElementById('touch-attack')?.addEventListener('touchstart', e => { e.preventDefault(); touch.attack = true; }, {passive:false});
 document.getElementById('touch-attack')?.addEventListener('touchend', () => touch.attack = false);
